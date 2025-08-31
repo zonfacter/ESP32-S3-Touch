@@ -140,55 +140,71 @@ void App::loop(){
   // Minimale Delay wie .ino
   delay(1);
 }
-void App::updateMultiTouch() {
-  const unsigned long now = millis();
-
-  bool didRead = false;
-  if (g_touchIrqFlag) {
-    // IRQs kurz sperren, damit wir nicht reentern
-    detachInterrupt(digitalPinToInterrupt(PIN_TOUCH_INT));
-    g_touchIrqFlag = false;
-
-    // Manche Controller halten INT LOW bis „alles“ gelesen ist.
-    // Darum lesen wir, solange INT low bleibt – aber mit Obergrenze.
-    for (int i = 0; i < 3; ++i) {
-      if (!_touch.readFrame()) break;
-      _touch.mapAndTrack();
-      didRead = true;
-      if (digitalRead(PIN_TOUCH_INT) == HIGH) break;
-    }
-
-    // kleine IRQ-Schonzeit gegen Glitches
-    delayMicroseconds(200);
-    attachInterrupt(digitalPinToInterrupt(PIN_TOUCH_INT), onTouchIRQ, TOUCH_IRQ_EDGE);
-  }
-
-  // Optionaler Fallback-Poll (z.B. alle 10ms), falls mal ein IRQ verloren geht
+void App::updateMultiTouch(){
+  unsigned long now = millis();
   static unsigned long lastPoll = 0;
-  if (!didRead && (now - lastPoll) >= 10) {
-    lastPoll = now;
-    if (_touch.readFrame()) {
-      _touch.mapAndTrack();
-    }
-  }
-
-  // Danach: Punkte holen, Stabilisierung & Gesten (dein vorhandener Code)
-  TouchPoint pts[MAX_TOUCH_POINTS];
+  
+  TouchPoint pts[MAX_TOUCH_POINTS]; 
   _touch.getTouchPoints(pts);
-  const uint8_t ac = _touch.activeCount();
-
-  // 10ms Stabilisierung der Fingeranzahl
-  static uint8_t lastAc=0; static unsigned long tChange=0;
-  if (ac!=lastAc) { lastAc=ac; tChange=now; }
-  const bool stable = (now - tChange) >= TOUCH_SETTLE_MS; // z.B. 10
-
-  GestureEvent g = {GestureType::None,0,0,0,0,now};
-  if (stable) g = _gest.process(pts, ac);
-
-  if (g.type != GestureType::None) {
-    _lastGesture = g;
-    // _audio.playGesture(g.type); // wenn gewünscht
+  
+for(int i = 0; i < MAX_TOUCH_POINTS; i++){
+  if(pts[i].was_active_last_frame && !pts[i].active){
+    pts[i].touch_end = now;
+    Serial.printf("DEBUG: Touch[%d] ENDED at %lu\n", i, now);
   }
 }
+  
+  // POLLING-TEST statt IRQ (alle 17ms)
+  if (now - lastPoll >= 17) {
+    bool hasTouch = _touch.readFrame();
+    lastPoll = now;
+    
+    Serial.printf("DEBUG: readFrame()=%s\n", hasTouch ? "true" : "false");
+    
+    if (!hasTouch) {
+      Serial.println("DEBUG: No touch - should release all");
+    } else {
+      _touch.mapAndTrack();
+    }
+  } else {
+    return; // Kein Touch-Update in diesem Frame
+  }
+  
+  // DEBUG: Touch-Point-Status
+  _touch.getTouchPoints(pts);
+  uint8_t current_active_count = _touch.activeCount();
+  Serial.printf("DEBUG: Active count = %d\n", current_active_count);
+  
+  for(int i = 0; i < MAX_TOUCH_POINTS; i++){
+    if(pts[i].active) {
+      Serial.printf("  Point[%d]: (%d,%d) s=%d\n", i, pts[i].x, pts[i].y, pts[i].strength);
+    }
+  }
+  
+  // Gesten verarbeiten
+  GestureEvent g = _gest.process(pts, current_active_count);
+  Serial.printf("DEBUG: Gesture process - last_count=%d, current_count=%d\n", 
+              _gest._lastActiveCount, current_active_count);
 
+  if (g.type != GestureType::None){
+    _lastGesture = g;
+    // _audio.playGesture(g.type); // Weiterhin auskommentiert
+    
+    Serial.printf("GESTE: ");
+    switch (g.type) {
+      case GestureType::Tap: Serial.print("TAP"); break;
+      case GestureType::DoubleTap: Serial.print("DOUBLE_TAP"); break;
+      case GestureType::LongPress: Serial.print("LONG_PRESS"); break;
+      case GestureType::SwipeLeft: Serial.print("SWIPE_LEFT"); break;
+      case GestureType::SwipeRight: Serial.print("SWIPE_RIGHT"); break;
+      case GestureType::SwipeUp: Serial.print("SWIPE_UP"); break;
+      case GestureType::SwipeDown: Serial.print("SWIPE_DOWN"); break;
+      case GestureType::TwoFingerTap: Serial.print("TWO_FINGER_TAP"); break;
+      case GestureType::ThreeFingerTap: Serial.print("THREE_FINGER_TAP"); break;
+      default: Serial.print("UNKNOWN"); break;
+    }
+    Serial.printf(" at (%d,%d) value=%.2f fingers=%d\n", 
+                  g.x, g.y, g.value, g.finger_count);
+  }
+}
 
