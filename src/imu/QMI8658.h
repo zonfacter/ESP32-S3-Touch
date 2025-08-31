@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include "../config/pins.h"
+#include "../config/params.h"   // <-- hinzufügen, damit I2C_FREQ_HZ sichtbar ist
 
 struct IMUData { float ax, ay, az, gx, gy, gz; };
 

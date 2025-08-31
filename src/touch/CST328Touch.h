@@ -30,7 +30,7 @@ private:
   bool readReg16(uint16_t reg, uint8_t* buf, size_t len);
   void rawToDisplay(uint16_t rx, uint16_t ry, uint16_t& dx, uint16_t& dy) const;
   void assignByProximity();
-
+  void forceCompleteReset();  // <- Neue Methode hinzufügen
   RawCSTPoint _raw[MAX_TOUCH_POINTS]{};
   uint8_t _rawCount = 0;
   TouchPoint _points[MAX_TOUCH_POINTS]{};

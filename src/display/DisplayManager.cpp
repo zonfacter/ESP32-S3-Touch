@@ -6,6 +6,14 @@
 
 bool DisplayManager::begin() {
   if (!_gfx.begin()) return false;
+
+// Backlight einschalten
+  pinMode(PIN_LCD_BL, OUTPUT);
+  digitalWrite(PIN_LCD_BL, PIN_LCD_BL_ACTIVE_HIGH ? HIGH : LOW);
+
+// Testbild (kurz) – hilft beim Inbetriebnehmen
+  _gfx.fillScreen(TFT_BLUE); delay(150);
+  _gfx.fillScreen(TFT_BLACK);
   _gfx.setRotation(DISPLAY_ROTATION);
   _gfx.fillScreen(TFT_BLACK);
   _gfx.setTextColor(TFT_WHITE, TFT_BLACK);
