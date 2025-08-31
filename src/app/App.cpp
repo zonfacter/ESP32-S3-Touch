@@ -7,10 +7,6 @@
 
 bool App::begin(){
   Serial.begin(115200);
-  Serial.setTxTimeoutMs(0);
-  // Warte kurz auf USB-CDC (ohne „hängenzubleiben“, max. 2s)
-  unsigned long t0 = millis();
-  while (!Serial && (millis() - t0) < 2000) { delay(10); }
   delay(50);
   Serial.println("\n[APP] Start");
 
@@ -71,116 +67,49 @@ void App::scanI2C(TwoWire& w, const char* name){
 
 void App::loop(){
   unsigned long now = millis();
-  
-  // FPS berechnen (unverändert)
-  float dt = (now - _lastFrame) / 1000.0f; 
-  if (dt < 1e-6f) dt = 1e-6f;
-  _fps = 0.9f * _fps + 0.1f * (1.0f / dt); 
-  _lastFrame = now;
+  // FPS berechnen
+  float dt = (now - _lastFrame) / 1000.0f; if (dt < 1e-6f) dt = 1e-6f;
+  _fps = 0.9f * _fps + 0.1f * (1.0f / dt); _lastFrame = now;
 
-  // ============================================
-  // VEREINFACHTE TOUCH-VERARBEITUNG (geändert)
-  // ============================================
-  
-  // Touch-Daten lesen (IRQ oder Polling)
-  bool doRead = CST328Touch::irqFlag; 
-  CST328Touch::irqFlag = false;
-  if (!doRead && (now % 17 == 0)) doRead = true; // 60fps Polling-Fallback
-  
-  if (doRead){ 
-    if (_touch.readFrame()) { 
-      _touch.mapAndTrack(); 
-    } 
-  }
+  // TOUCH: per IRQ oder Polling
+  bool doRead = CST328Touch::irqFlag; CST328Touch::irqFlag = false;
+  if (!doRead && (now % 10 == 0)) doRead = true; // leichter Poll-Fallback
+  if (doRead){ if (_touch.readFrame()) { _touch.mapAndTrack(); } }
 
-  // Touch-Points abrufen
-  TouchPoint pts[MAX_TOUCH_POINTS]; 
-  _touch.getTouchPoints(pts);
-  uint8_t activeCount = _touch.activeCount();
-  // Nach _touch.getTouchPoints(pts);
-if(ac > 0) {
-  Serial.printf("Touch-Debug: %d aktiv bei (%d,%d)\n", ac, pts[0].x, pts[0].y);
-}
-  // ============================================
-  // SOFORTIGE GESTEN-VERARBEITUNG (NEU!)
-  // ============================================
-  
-  // Zusätzliche Touch-End Timestamps setzen (falls nicht von CST328Touch gemacht)
-  for(int i = 0; i < MAX_TOUCH_POINTS; i++){
-    if(pts[i].was_active_last_frame && !pts[i].active){
-      pts[i].touch_end = now; // Touch wurde gerade beendet
-    }
-  }
-  
-  // ❌ ALTE SETTLE-TIME LOGIK ENTFERNT:
-  // static uint8_t lastAc = 0; 
-  // static unsigned long acChangedAt = 0;
-  // if (ac != lastAc){ lastAc = ac; acChangedAt = now; }
-  // bool countStable = (now - acChangedAt) >= TOUCH_SETTLE_MS;
-  
-  // ✅ NEUE SOFORTIGE GESTEN-VERARBEITUNG:
-  GestureEvent g = _gest.process(pts, activeCount);
-  
+  // Gesten verarbeiten
+  TouchPoint pts[MAX_TOUCH_POINTS]; _touch.getTouchPoints(pts);
+  uint8_t ac = _touch.activeCount();
+  GestureEvent g = _gest.process(pts, ac);
   if (g.type != GestureType::None){
     _lastGesture = g;
     _audio.playGesture(g.type);
-    
-    // Verbessertes Debug-Output (wie in .ino)
-    Serial.printf("🎭 GESTE: ");
-    switch (g.type) {
-      case GestureType::Tap: Serial.print("TAP"); break;
-      case GestureType::DoubleTap: Serial.print("DOUBLE_TAP ✓"); break;
-      case GestureType::LongPress: Serial.print("LONG_PRESS"); break;
-      case GestureType::SwipeLeft: Serial.print("SWIPE_LEFT"); break;
-      case GestureType::SwipeRight: Serial.print("SWIPE_RIGHT"); break;
-      case GestureType::SwipeUp: Serial.print("SWIPE_UP"); break;
-      case GestureType::SwipeDown: Serial.print("SWIPE_DOWN"); break;
-      case GestureType::PinchIn: Serial.print("PINCH_IN"); break;
-      case GestureType::PinchOut: Serial.print("PINCH_OUT"); break;
-      case GestureType::RotateCW: Serial.print("ROTATE_CW"); break;
-      case GestureType::RotateCCW: Serial.print("ROTATE_CCW"); break;
-      case GestureType::TwoFingerTap: Serial.print("TWO_FINGER_TAP ✓"); break;
-      case GestureType::ThreeFingerTap: Serial.print("THREE_FINGER_TAP ✓"); break;
-      default: Serial.print("UNKNOWN"); break;
-    }
-    Serial.printf(" at (%d,%d) value=%.2f fingers=%d\n", 
-                  g.x, g.y, g.value, g.finger_count);
   }
 
-  // ============================================
-  // REST BLEIBT UNVERÄNDERT
-  // ============================================
-  
   // IMU lesen (entspannt 50 Hz)
   static unsigned long lastIMU = 0;
-  if (now - lastIMU >= 20){ 
-    _imu.read(_imuData); 
-    lastIMU = now; 
-  }
+  if (now - lastIMU >= 20){ _imu.read(_imuData); lastIMU = now; }
 
-  // HUD ~30 Hz (jetzt 60fps für flüssiges Touch-Feedback)
-  if (now - _lastHUD >= 17){ // 17ms = ~60fps
+  // HUD ~30 Hz
+  if (now - _lastHUD >= 33){
     _disp.renderHUD(_lastGesture, _fps,
                     _imuData.ax, _imuData.ay, _imuData.az,
                     _imuData.gx, _imuData.gy, _imuData.gz);
     _lastHUD = now;
   }
 
-  // Konsole & RS485 (unverändert)
+  // Konsole & RS485
   _console.loop();
 
-  // RS485 RX → optional echo/Log (unverändert)
-  static char rxbuf[256]; 
-  static size_t rxi = 0;
+  // RS485 RX → optional echo/Log
+  static char rxbuf[256]; static size_t rxi = 0;
   while (_rs485.available() > 0){
-    int c = _rs485.read(); 
-    if (c < 0) break;
-    if (c == '\r') continue;
+    int c = _rs485.read(); if (c < 0) break;
+    if (c == '\r') continue;               // CR ignorieren
     if (rxi < sizeof(rxbuf) - 1) rxbuf[rxi++] = (char)c;
-    if (c == '\n'){
+    if (c == '\n'){                        // ← korrektes Zeilenende
       rxbuf[rxi] = 0;
       String line = String(rxbuf);
-      if (_echo485) _rs485.write(line);
+      if (_echo485) _rs485.write(line);    // loopback
       Serial.print("[RS485] RX: "); Serial.print(line);
       rxi = 0;
     }

@@ -37,7 +37,6 @@ bool CST328Touch::readReg16(uint16_t reg, uint8_t* buf, size_t len){
 }
 
 bool CST328Touch::readFrame(){
-  
   // Anzahl Punkte
   uint8_t nbuf[1];
   if (!readReg16(CST328_REG_NUM, nbuf, 1)) return false;
@@ -62,35 +61,8 @@ bool CST328Touch::readFrame(){
     uint16_t s = ((uint16_t)b[4] << 8) | b[5];
     _raw[i] = {x,y,s};
   }
-
-// Phantom Touch Filter für Display-Ränder
-bool isEdgeTouch = (dx <= 3 || dx >= DISPLAY_WIDTH-4 || 
-                   dy <= 3 || dy >= DISPLAY_HEIGHT-4);
-if (isEdgeTouch && _raw[i].strength < 50) {
-  continue; // Edge-Touch mit schwacher Signalstärke ignorieren
-}
-
-  // *** NEU: Stärke-Filter ***
-  uint8_t w = 0;
-  for (uint8_t i = 0; i < _rawCount; ++i) {
-    if (_raw[i].strength >= TOUCH_MIN_STRENGTH) {
-      _raw[w++] = _raw[i];
-    }
-  }
-  _rawCount = w;
-
-  // *** NEU: Release wenn nach Filter keine Punkte mehr da sind ***
-  if (_rawCount == 0){
-    for (auto &p : _points){
-      if (p.active){ p.active=false; p.touch_end=millis(); p.long_press_fired=false; }
-    }
-    _activeCount = 0;
-    return true;
-  }
-
   return true;
 }
-
 
 void CST328Touch::rawToDisplay(uint16_t rx, uint16_t ry, uint16_t& dx, uint16_t& dy) const{
   // normieren 0..1

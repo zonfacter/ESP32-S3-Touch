@@ -51,7 +51,3 @@ static constexpr uint8_t I2C_ADDR_EXPECTED[3] = { 0x51, 0x6B, 0x7E };
 // Touch Controller Adresse (CST328)
 static constexpr uint8_t CST328_I2C_ADDR = 0x1A; // bestätigt
 
-// LCD Backlight (laut Schaltplan LCD_BL -> GPIO21)
-static constexpr int PIN_LCD_BL = 5;
-static constexpr bool PIN_LCD_BL_ACTIVE_HIGH = true; // Transistor schaltet gegen GND -> HIGH an
-

@@ -43,28 +43,20 @@ void AudioI2S::toneHz(float hz, uint16_t ms, float amp){
   const int BUF = 256;
   int16_t buf[BUF];
   float phase = 0.f;
-
-  // kurze, nicht-blockierende Writes (Timeout 10ms). Droppt zur Not Samples.
-  for (int i=0; i<N; ){
+  for (int i=0;i<N;){
     int chunk = min(BUF, N - i);
-    for (int j=0; j<chunk; j++, i++){
+    for (int j=0;j<chunk;j++, i++){
       float s = sinf(phase) * amp;
-      buf[j] = (int16_t)(s * 32767);
+      int16_t v = (int16_t) (s * 32767);
+      buf[j] = v;
       phase += twoPiOverSR * hz;
       if (phase > 2*M_PI) phase -= 2*M_PI;
     }
-    size_t written = 0;
-    // 10 ms Timeout statt portMAX_DELAY
-    i2s_write(I2S_PORT, (const char*)buf, chunk*sizeof(int16_t),
-              &written, 10 / portTICK_PERIOD_MS);
-    // wenn Puffer voll: written kann < chunk sein -> rest wird im nächsten Zyklus erzeugt
+    size_t written=0; i2s_write(I2S_PORT, (const char*)buf, chunk*sizeof(int16_t), &written, portMAX_DELAY);
   }
 }
 
 void AudioI2S::playGesture(const GestureType g){
-  unsigned long now = millis();
-  if (now < _gateUntil) return;     // simple flood-guard
-
   switch (g){
     case GestureType::Tap:          toneHz(1200, 60); break;
     case GestureType::DoubleTap:    toneHz(1200, 60); toneHz(0, 40); toneHz(1200, 60); break;
@@ -81,7 +73,4 @@ void AudioI2S::playGesture(const GestureType g){
     case GestureType::ThreeFingerTap:toneHz(800, 120); break;
     default: break;
   }
-
-  // nächstes Signal frühestens in ~150ms (verhindert Ton-Staus im Loop)
-  _gateUntil = now + 150;
 }

@@ -19,7 +19,7 @@ public:
       cfg.spi_mode    = 0;
       cfg.freq_write  = 40000000;
       cfg.freq_read   = 16000000;
-      cfg.spi_3wire   = false;
+      cfg.spi_3wire   = true;
       cfg.use_lock    = true;
       cfg.dma_channel = SPI_DMA_CH_AUTO;
       cfg.pin_sclk    = PIN_LCD_SCLK;
@@ -45,7 +45,7 @@ public:
       cfg.dummy_read_bits = 1;
       cfg.readable       = false;
       cfg.invert         = true;
-      cfg.rgb_order      = false;
+      cfg.rgb_order      = true;
       cfg.dlen_16bit     = false;
       cfg.bus_shared     = true;
       _panel.config(cfg);
