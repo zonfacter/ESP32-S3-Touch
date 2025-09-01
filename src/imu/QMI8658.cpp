@@ -4,7 +4,9 @@
 #include "QMI8658.h"
 
 bool QMI8658::begin(){
-  Wire.begin(PIN_IMU_SDA, PIN_IMU_SCL, I2C_FREQ_HZ);
+  // ENTFERNT: Wire.begin() - wird bereits in App.cpp initialisiert
+  // Wire.begin(PIN_IMU_SDA, PIN_IMU_SCL, I2C_FREQ_HZ);
+  
   // Soft init: Reset + basic config (vereinfachte Demo – robust genug zum Lesen)
   write1(0x60, 0x01); // soft reset
   delay(10);
