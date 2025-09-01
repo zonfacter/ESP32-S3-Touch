@@ -17,7 +17,9 @@ public:
 private:
   void scanI2C(TwoWire& w, const char* name);
   void updateMultiTouch();  // <- Diese Zeile hinzufügen
-  
+  void processReleaseGestures(TouchPoint pts[], uint8_t last_count, unsigned long now);
+  void setGesture(GestureType type, uint16_t x, uint16_t y, float value, uint8_t fingers, unsigned long timestamp);
+
   DisplayManager _disp;
   CST328Touch    _touch;
   GestureEngine  _gest;
