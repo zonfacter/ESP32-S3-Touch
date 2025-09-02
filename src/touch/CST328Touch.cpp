@@ -3,6 +3,13 @@
 // ----------------------------------------------------------------------------
 #include "CST328Touch.h"
 
+#include "../config/params.h"   // <-- wichtig: bringt TOUCH_MIN_STRENGTH, DISPLAY_WIDTH/HEIGHT
+
+// Fallback (falls eine ältere params.h das noch nicht definiert):
+#ifndef TOUCH_MIN_STRENGTH
+#define TOUCH_MIN_STRENGTH 0
+#endif
+
 volatile bool CST328Touch::irqFlag = false;
 
 void IRAM_ATTR CST328Touch::onIntISR(){
@@ -50,6 +57,19 @@ bool CST328Touch::readReg16(uint16_t reg, uint8_t* buf, size_t len){
   return true;
 }
 
+// NEU: writeReg16 Implementierung
+bool CST328Touch::writeReg16(uint16_t reg, const uint8_t* buf, size_t len){
+  Wire1.beginTransmission(CST328_I2C_ADDR);
+  Wire1.write((uint8_t)(reg >> 8));
+  Wire1.write((uint8_t)(reg & 0xFF));
+  
+  for (size_t i = 0; i < len; i++) {
+    Wire1.write(buf[i]);
+  }
+  
+  return (Wire1.endTransmission() == 0);
+}
+
 void CST328Touch::resetController() {
   Serial.println("[TOUCH] Resetting CST328 due to corruption...");
   
@@ -71,192 +91,125 @@ void CST328Touch::resetController() {
   Serial.println("[TOUCH] Reset complete");
 }
 
-bool CST328Touch::readFrame(){
-  // Anzahl aktive Punkte lesen
-  uint8_t nbuf[1];
-  if (!readReg16(CST328_REG_NUM, nbuf, 1)) {
-    _corruptionCount++;
-    if (_corruptionCount > 5) {
-      resetController();
-      return false;
-    }
+// ============================================================================
+// CST328Touch::readFrame() – Parsing exakt nach CST328-Datenblatt v2.2
+//  • Liest D000..D01A (27 Bytes) in einem Rutsch
+//  • Fingerzahl: D005 (low nibble), Signatur: D006 == 0xAB
+//  • Pro Finger 5 Bytes: [ID/Status][X_H][Y_H][XY low nibbles][Pressure]
+//  • 12-bit: X=(XH<<4)|(XY>>4), Y=(YH<<4)|(XY&0x0F)
+//  • Status-Nibble: konservativ „!=0“ als aktiv (Touch), um FW-Varianten abzudecken
+//  • Setzt Releases bei 0 Fingern oder wenn nach Filter 0 übrig
+//  • Sanftes Debug (throttled) zeigt D005/D006/kept-Punkte
+// ============================================================================
+bool CST328Touch::readFrame()
+{
+  // 1) Gesamten Block D000..D01A holen (27 Bytes)
+  uint8_t buf[27] = {0};
+  if (!readReg16(0xD000, buf, sizeof(buf))) {
     return false;
   }
-  
-  _rawCount = nbuf[0] & 0x0F;
-  if (_rawCount > MAX_TOUCH_POINTS) _rawCount = MAX_TOUCH_POINTS;
 
-  // Alle Punkte inaktiv setzen wenn keine Touch-Punkte
-  if (_rawCount == 0) {
+  // 2) Fingerzahl + Signatur prüfen
+  const uint8_t d005 = buf[0x05];               // Fingerzahl im low nibble
+  const uint8_t d006 = buf[0x06];               // soll 0xAB sein
+  uint8_t reported  = (d005 & 0x0F);
+  uint8_t count     = (reported > MAX_TOUCH_POINTS) ? MAX_TOUCH_POINTS : reported;
+
+  // Optional: Modus/Signatur checken – wenn nicht 0xAB, (einmal) Normalmodus setzen
+  static bool triedNormal = false;
+  if (d006 != 0xAB && !triedNormal) {
+    triedNormal = true;
+    // 0xD109 = ENUM_MODE_NORMAL (laut DB), Wert ist i.d.R. egal (0x00 reicht)
+    uint8_t val = 0x00;
+    // Falls du writeReg16 noch nicht hast: gleiche Signatur wie readReg16, nur Schreibpfad.
+    (void)writeReg16(0xD109, &val, 1);          // in Normalmodus schalten
+    return false;                                // nächster Frame wird korrekt
+  }
+
+  // 3) 0 Finger → Releases und zurück
+  if (count == 0) {
     for (auto &p : _points) {
       if (p.active) {
-        Serial.printf("[TOUCH] RELEASE touch %d\n", findActiveIndex(&p));
+        p.active = false;
+        p.touch_end = millis();
+        p.was_active_last_frame = true;
       }
-      p.active = false;
-      p.was_active_last_frame = false;
     }
+    _rawCount = 0;
     _activeCount = 0;
-    _corruptionCount = 0; // Reset corruption counter on clean read
+
+    // Debug (throttled)
+    static unsigned long t0 = 0;
+    if (millis() - t0 > 250) {
+      Serial.printf("[TOUCH] D005=0x%02X D006=0x%02X count=0\n", d005, d006);
+      t0 = millis();
+    }
     return true;
   }
 
-  // Touch-Daten lesen (6 Bytes pro Punkt)
-  uint8_t buf[6 * MAX_TOUCH_POINTS] = {0};
-  if (!readReg16(CST328_REG_COORD, buf, _rawCount * 6)) {
-    _corruptionCount++;
-    if (_corruptionCount > 5) {
-      resetController();
+  // 4) Offsets der Fingerslots gemäß Tabelle
+  auto baseOf = [](uint8_t idx)->uint8_t {
+    switch (idx) {
+      case 0: return 0x00; // F1: D000..D004
+      case 1: return 0x07; // F2: D007..D00B
+      case 2: return 0x0C; // F3: D00C..D010
+      case 3: return 0x11; // F4: D011..D015
+      case 4: return 0x16; // F5: D016..D01A
+      default: return 0x00;
     }
-    return false;
+  };
+
+  // 5) Punkte dekodieren
+  uint8_t kept = 0;
+  for (uint8_t i = 0; i < count; ++i) {
+    const uint8_t off    = baseOf(i);
+    const uint8_t idstat = buf[off + 0];    // high nibble: ID, low: Status
+    const uint8_t xh     = buf[off + 1];    // X >> 4
+    const uint8_t yh     = buf[off + 2];    // Y >> 4
+    const uint8_t xy     = buf[off + 3];    // [X low4 | Y low4]
+    const uint8_t pres   = buf[off + 4];    // 8-bit pressure
+
+    const uint8_t status = (idstat & 0x0F);
+
+    // Konservativ: alles != 0 als „aktiv“ akzeptieren.
+    // (DB nennt 0x06=Touch; FW-Varianten melden teils 0x07/0x0F u.ä.)
+    if (status != 0x00) {
+      const uint16_t x = ((uint16_t)xh << 4) | (xy >> 4);
+      const uint16_t y = ((uint16_t)yh << 4) | (xy & 0x0F);
+      const uint16_t s = pres; // 8-bit Druck
+      _raw[kept++] = { x, y, s };
+    }
+  }
+  _rawCount = kept;
+
+  // 6) Wenn nach Status-Filter nichts übrig → Releases
+  if (_rawCount == 0) {
+    for (auto &p : _points) {
+      if (p.active) {
+        p.active = false;
+        p.touch_end = millis();
+        p.was_active_last_frame = true;
+      }
+    }
+    _activeCount = 0;
   }
 
-  // Korruptions-Detection auf Paket-Level
-  bool packetCorrupted = false;
-  for (uint8_t i = 0; i < _rawCount * 6; i++) {
-    // Prüfe auf unrealistic patterns (alle Bytes gleich, etc.)
-    if (i >= 6) {
-      // Wiederholendes Pattern detection
-      bool isRepeating = true;
-      for (uint8_t j = 0; j < 6; j++) {
-        if (buf[j] != buf[i - 6 + (j % 6)]) {
-          isRepeating = false;
-          break;
-        }
-      }
-      if (isRepeating) {
-        packetCorrupted = true;
-        break;
-      }
+  // 7) Debug-Ausgabe (throttled)
+  static unsigned long lastDbg = 0;
+  if (millis() - lastDbg > 150) {
+    Serial.printf("[TOUCH] D005=0x%02X D006=0x%02X reported=%u kept=%u  ",
+                  d005, d006, reported, _rawCount);
+    for (uint8_t i=0; i<_rawCount; ++i) {
+      Serial.printf("#%u raw(%u,%u) s=%u  ", i, _raw[i].x, _raw[i].y, _raw[i].strength);
     }
-  }
-  
-  if (packetCorrupted) {
-    _corruptionCount++;
-    Serial.printf("[TOUCH] Packet corruption detected (count: %d)\n", _corruptionCount);
-    
-    if (_corruptionCount > 3) { // Weniger tolerant
-      resetController();
-    }
-    return false;
+    Serial.println();
+    lastDbg = millis();
   }
 
-  int validPoints = 0;
-  
-  // Raw-Punkte parsen mit verstärkter Validierung
-  for (uint8_t i = 0; i < _rawCount; i++) {
-    uint8_t* b = &buf[i * 6];
-    
-    // HIGH-LOW Byte-Order (bestätigt)
-    uint16_t x = ((uint16_t)b[0] << 8) | b[1];
-    uint16_t y = ((uint16_t)b[2] << 8) | b[3];
-    uint16_t strength = ((uint16_t)b[4] << 8) | b[5];
-    
-    // VERSTÄRKTE Validierung
-    bool valid = true;
-    
-    // 1. Basis-Koordinaten-Check
-    if (x > 4096 || y > 4096) {
-      valid = false;
-    }
-    
-    // 2. Strength-Check
-    if (strength > 20000 || strength < 5) {
-      valid = false;  
-    }
-    
-    // 3. Sprung-Detection mit dynamischen Schwellwerten
-    static uint16_t lastValidX = 0, lastValidY = 0;
-    static unsigned long lastValidTime = 0;
-    unsigned long now = millis();
-    
-    if (lastValidX > 0 && lastValidY > 0 && (now - lastValidTime) < 1000) {
-      uint16_t dx = (x > lastValidX) ? (x - lastValidX) : (lastValidX - x);
-      uint16_t dy = (y > lastValidY) ? (y - lastValidY) : (lastValidY - y);
-      
-      // Dynamische Schwellwerte basierend auf Zeit zwischen Punkten
-      uint16_t maxJump = (now - lastValidTime < 50) ? 200 : 500;
-      
-      if (dx > maxJump || dy > maxJump) {
-        valid = false;
-      }
-    }
-    
-    // 4. Check für "stuck" Werte (gleiche Koordinaten zu oft)
-    static uint16_t stuckX = 0, stuckY = 0;
-    static int stuckCount = 0;
-    
-    if (x == stuckX && y == stuckY) {
-      stuckCount++;
-      if (stuckCount > 10) { // Nach 10 gleichen Werten = stuck
-        valid = false;
-      }
-    } else {
-      stuckX = x; stuckY = y; stuckCount = 0;
-    }
-    
-    if (!valid) {
-      _corruptionCount++;
-      
-      // Nur jede 10. invalide Meldung loggen (spam-Schutz)
-      static int invalidLogCount = 0;
-      if (++invalidLogCount % 10 == 1) {
-        Serial.printf("[TOUCH] Invalid #%d: raw(%d,%d) s=%d dx=%d dy=%d stuck=%d\n", 
-                      invalidLogCount, x, y, strength, 
-                      lastValidX > 0 ? abs((int)x - (int)lastValidX) : 0,
-                      lastValidY > 0 ? abs((int)y - (int)lastValidY) : 0,
-                      stuckCount);
-      }
-      
-      // Bei zu vielen invaliden Werten -> Reset
-      if (_corruptionCount > 8) {
-        resetController();
-        return false;
-      }
-      
-      continue; // Skip diesen Punkt
-    }
-    
-    // Reset corruption counter bei gültigen Daten
-    _corruptionCount = 0;
-    
-    // Update für Sprung-Detection
-    lastValidX = x; lastValidY = y; lastValidTime = now;
-    
-    _raw[validPoints] = {x, y, strength};
-    
-    // Koordinaten-Transformation
-    uint16_t dispX, dispY;
-    rawToDisplay(x, y, dispX, dispY);
-    
-    // Touch-Punkt aktualisieren
-    _points[validPoints].x = dispX;
-    _points[validPoints].y = dispY;
-    _points[validPoints].strength = strength;
-    _points[validPoints].active = true;
-    
-    if (!_points[validPoints].was_active_last_frame) {
-      _points[validPoints].touch_start = millis();
-      _points[validPoints].start_x = dispX;
-      _points[validPoints].start_y = dispY;
-      Serial.printf("[TOUCH] NEW valid touch %d at (%d,%d) from raw(%d,%d)\n", 
-                    validPoints, dispX, dispY, x, y);
-    }
-    _points[validPoints].was_active_last_frame = true;
-    validPoints++;
-  }
-  
-  // Restliche Slots inaktiv
-  for (uint8_t i = validPoints; i < MAX_TOUCH_POINTS; i++) {
-    if (_points[i].active) {
-      Serial.printf("[TOUCH] RELEASE touch %d\n", i);
-    }
-    _points[i].active = false;
-    _points[i].was_active_last_frame = false;
-  }
-  
-  _activeCount = validPoints;
   return true;
 }
+
+
 
 int CST328Touch::findActiveIndex(const TouchPoint* p) const {
   for (int i = 0; i < MAX_TOUCH_POINTS; i++) {
