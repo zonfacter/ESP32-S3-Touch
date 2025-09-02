@@ -1,5 +1,5 @@
 // ============================================================================
-// File: src/display/DisplayManager.h
+// File: src/display/DisplayManager.h - ERWEITERT FÜR TOUCH DEBUG
 // ----------------------------------------------------------------------------
 #pragma once
 #include <Arduino.h>
@@ -59,6 +59,7 @@ public:
   bool begin();
   void renderHUD(const GestureEvent& lastGesture, float fps,
                  float ax, float ay, float az, float gx, float gy, float gz);
+  void renderTouchPoints(const TouchPoint pts[MAX_TOUCH_POINTS], uint8_t activeCount); // NEU
   LGFX_ST7789& gfx() { return _gfx; }
 private:
   LGFX_ST7789 _gfx;

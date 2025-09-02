@@ -1,6 +1,5 @@
-
 // ============================================================================
-// File: src/display/DisplayManager.cpp
+// File: src/display/DisplayManager.cpp - ERWEITERT FÜR TOUCH DEBUG
 // ----------------------------------------------------------------------------
 #include "DisplayManager.h"
 
@@ -62,5 +61,66 @@ void DisplayManager::renderHUD(const GestureEvent& g, float fps,
   }
   _gfx.printf("Gesture: %s (%u) val=%.2f [@%u,%u]",
               name, g.finger_count, g.value, g.x, g.y);
+  _gfx.setTextColor(TFT_WHITE, TFT_BLACK);
+}
+
+// NEU: Touch-Punkte visuell anzeigen
+void DisplayManager::renderTouchPoints(const TouchPoint pts[MAX_TOUCH_POINTS], uint8_t activeCount) {
+  // Touch area (unterhalb der HUD)
+  const int TOUCH_AREA_TOP = 70;
+  
+  // Lösche vorherige Touch-Anzeige
+  static uint16_t lastTouchX[MAX_TOUCH_POINTS] = {0};
+  static uint16_t lastTouchY[MAX_TOUCH_POINTS] = {0};
+  static bool lastActive[MAX_TOUCH_POINTS] = {false};
+  
+  // Lösche alte Positionen
+  for (int i = 0; i < MAX_TOUCH_POINTS; i++) {
+    if (lastActive[i] && lastTouchY[i] >= TOUCH_AREA_TOP) {
+      _gfx.fillCircle(lastTouchX[i], lastTouchY[i], 8, TFT_BLACK);
+    }
+  }
+  
+  // Zeichne neue Touch-Punkte
+  for (int i = 0; i < MAX_TOUCH_POINTS; i++) {
+    if (pts[i].active) {
+      uint16_t x = pts[i].x;
+      uint16_t y = pts[i].y;
+      
+      // Nur im Touch-Bereich zeichnen
+      if (y >= TOUCH_AREA_TOP && y < DISPLAY_HEIGHT && x < DISPLAY_WIDTH) {
+        // Farbe je nach Punkt-Index
+        uint16_t colors[] = {TFT_RED, TFT_GREEN, TFT_BLUE, TFT_YELLOW, TFT_MAGENTA};
+        uint16_t color = colors[i % 5];
+        
+        _gfx.fillCircle(x, y, 6, color);
+        _gfx.drawCircle(x, y, 8, TFT_WHITE);
+        
+        // Touch-Info
+        _gfx.setTextColor(TFT_WHITE, TFT_BLACK);
+        _gfx.setCursor(x + 12, y - 4);
+        _gfx.printf("%d", i);
+      }
+      
+      lastTouchX[i] = x;
+      lastTouchY[i] = y;
+    }
+    lastActive[i] = pts[i].active;
+  }
+  
+  // Touch-Status unten anzeigen
+  _gfx.fillRect(0, DISPLAY_HEIGHT - 20, DISPLAY_WIDTH, 20, TFT_NAVY);
+  _gfx.setTextColor(TFT_WHITE, TFT_NAVY);
+  _gfx.setCursor(4, DISPLAY_HEIGHT - 16);
+  _gfx.printf("Touch Points: %d", activeCount);
+  
+  // Erste aktive Touch-Koordinaten anzeigen
+  for (int i = 0; i < MAX_TOUCH_POINTS; i++) {
+    if (pts[i].active) {
+      _gfx.printf("  [%d] (%d,%d) S:%d", i, pts[i].x, pts[i].y, pts[i].strength);
+      break; // Nur ersten anzeigen wegen Platz
+    }
+  }
+  
   _gfx.setTextColor(TFT_WHITE, TFT_BLACK);
 }
