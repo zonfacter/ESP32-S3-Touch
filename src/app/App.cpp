@@ -7,7 +7,7 @@
 
 bool App::begin(){
   Serial.begin(115200);
-  Serial.setTxTimeoutMs(0);
+  //Serial.setTxTimeoutMs(0);
   unsigned long t0 = millis();
   while (!Serial && (millis() - t0) < 2000) { delay(10); }
   delay(100); // Mehr Zeit für Serial
@@ -239,4 +239,5 @@ void App::loop(){
       rxi = 0;
     }
   }
+
 }
